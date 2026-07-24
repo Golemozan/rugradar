@@ -1,10 +1,12 @@
 import "dotenv/config";
 import { createApi } from "../api/server.js";
 import { scanSolanaOnce } from "./scan.js";
+import { refreshBinanceListings } from "./binanceScan.js";
 import { telegramConfigured, startBot, currentChatId } from "../notify/telegram.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const SOLANA_INTERVAL = Number(process.env.SOLANA_POLL_INTERVAL_MS ?? 30000);
+const BINANCE_INTERVAL = Number(process.env.BINANCE_REFRESH_MS ?? 600000); // 10 dk
 
 async function main() {
   console.log("=== RugRadar worker ===");
@@ -32,6 +34,19 @@ async function main() {
     }
   };
   loop();
+
+  // Binance yeni-listeleme taramasi (ayri dongu). Ilk tur arka planda baslar;
+  // ilk calismada tum sembolleri tarihlemek uzun surer, sonrasi cache'ten hizli.
+  const binanceLoop = async () => {
+    try {
+      await refreshBinanceListings();
+    } catch (e) {
+      console.error("[binance] hata:", e);
+    } finally {
+      setTimeout(binanceLoop, BINANCE_INTERVAL);
+    }
+  };
+  binanceLoop();
 }
 
 main().catch((e) => {

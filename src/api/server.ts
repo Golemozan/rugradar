@@ -1,5 +1,6 @@
 import express from "express";
 import { prisma } from "../db/client.js";
+import { getBinanceListings } from "../worker/binanceScan.js";
 
 // Dashboard bu API'yi tuketir (Phase 3). Simdilik JSON endpoint'ler.
 export function createApi() {
@@ -50,6 +51,11 @@ export function createApi() {
       .filter((r) => (r.score ?? 0) >= minScore);
 
     res.json(rows);
+  });
+
+  // Son 6 ayda listelenmis Binance coinleri + fiyat performansi (bellek cache).
+  app.get("/api/binance-listings", (_req, res) => {
+    res.json(getBinanceListings());
   });
 
   // Gonderilen alert'ler.

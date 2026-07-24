@@ -1,10 +1,33 @@
 import { useEffect, useState, useCallback } from "react";
 import type { PoolRow, AlertRow } from "./types.ts";
+import { BinanceListings } from "./BinanceListings.tsx";
 
 const THRESHOLD = 70;
 const REFRESH_MS = 5000;
 
+type Tab = "scanner" | "binance";
+
 export function App() {
+  const [tab, setTab] = useState<Tab>("scanner");
+  return (
+    <div className="wrap">
+      <header className="top">
+        <h1>RugRadar</h1>
+        <nav className="tabs">
+          <button className={tab === "scanner" ? "tab on" : "tab"} onClick={() => setTab("scanner")}>
+            Solana Tarayıcı
+          </button>
+          <button className={tab === "binance" ? "tab on" : "tab"} onClick={() => setTab("binance")}>
+            Binance Yeni Listeler
+          </button>
+        </nav>
+      </header>
+      {tab === "scanner" ? <ScannerView /> : <BinanceListings />}
+    </div>
+  );
+}
+
+function ScannerView() {
   const [pools, setPools] = useState<PoolRow[]>([]);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [ok, setOk] = useState(true);
@@ -44,20 +67,15 @@ export function App() {
   const sorted = [...scored].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
   return (
-    <div className="wrap">
-      <header className="top">
-        <h1>RugRadar</h1>
-        <div className="status">
-          <span className={ok ? "dot-live" : "dot-live dot-off"} />
-          {ok ? (
-            <span>
-              canlı · {updated ? updated.toLocaleTimeString("tr-TR") : "..."}
-            </span>
-          ) : (
-            <span className="err">worker'a bağlanılamadı (:3000 açık mı?)</span>
-          )}
-        </div>
-      </header>
+    <>
+      <div className="status" style={{ marginBottom: 16 }}>
+        <span className={ok ? "dot-live" : "dot-live dot-off"} />
+        {ok ? (
+          <span>canlı · {updated ? updated.toLocaleTimeString("tr-TR") : "..."}</span>
+        ) : (
+          <span className="err">worker'a bağlanılamadı (:3000 açık mı?)</span>
+        )}
+      </div>
 
       <section className="tiles">
         <Tile label="Taranan pool" value={pools.length} sub="son 200 kayıt" />
@@ -121,7 +139,7 @@ export function App() {
           </table>
         )}
       </div>
-    </div>
+    </>
   );
 }
 

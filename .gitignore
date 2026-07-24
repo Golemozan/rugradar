@@ -8,3 +8,6 @@ dist/
 
 # build artifacts
 *.tsbuildinfo
+
+# binance listing cache (immutable, regenerated)
+.binance-listings-cache.json
