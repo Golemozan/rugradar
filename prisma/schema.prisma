@@ -1,0 +1,93 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Lokal: SQLite (sunucu yok, daemon yok — .cmd acilinca calisir, kapaninca durur).
+// Railway deploy'da provider = "postgresql" yapilacak (Json alanlar uyumlu).
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Taranan her pool (alert atsin atmasin hepsi kaydedilir).
+model Pool {
+  id                Int      @id @default(autoincrement())
+  chain             String   // solana | ethereum | bsc
+  pairAddress       String   @unique
+  baseTokenAddress  String
+  baseTokenSymbol   String
+  quoteTokenSymbol  String
+  dex               String
+  firstSeenAt       DateTime @default(now())
+  lastCheckedAt     DateTime @default(now())
+
+  checks Check[]
+  alerts Alert[]
+
+  @@index([chain])
+  @@index([lastCheckedAt])
+}
+
+// Bir pool'a yapilan tek bir guvenlik/holder taramasi + ham cevap.
+model Check {
+  id                   Int      @id @default(autoincrement())
+  poolId               Int
+  pool                 Pool     @relation(fields: [poolId], references: [id], onDelete: Cascade)
+  checkedAt            DateTime @default(now())
+  liquidityLocked      Boolean?
+  liquidityLockPct     Float?
+  ownershipRenounced   Boolean?
+  topHolderPct         Float?
+  honeypotResult       String?  // pass | fail | unknown
+  volumeLiquidityRatio Float?
+  rawResponse          String?  // JSON string — ham API cevabi (SQLite Json desteklemez)
+
+  score Score?
+
+  @@index([poolId])
+}
+
+// Bir check'ten cikan skor + faktor kirilimi.
+model Score {
+  id        Int      @id @default(autoincrement())
+  checkId   Int      @unique
+  check     Check    @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  score     Float
+  breakdown String   // JSON string — { factor: contribution }
+  createdAt DateTime @default(now())
+
+  alerts Alert[]
+}
+
+// Gonderilen alert kaydi (de-dupe icin).
+model Alert {
+  id                Int      @id @default(autoincrement())
+  poolId            Int
+  pool              Pool     @relation(fields: [poolId], references: [id], onDelete: Cascade)
+  scoreId           Int
+  score             Score    @relation(fields: [scoreId], references: [id], onDelete: Cascade)
+  sentAt            DateTime @default(now())
+  telegramMessageId String?
+  channel           String   // telegram | dashboard
+
+  @@index([poolId])
+  @@index([sentAt])
+}
+
+// --- Phase 4: Robinhood modulu (ayri, skorlama pipeline'iyla kod paylasmaz) ---
+model RobinhoodWatch {
+  id      Int      @id @default(autoincrement())
+  symbol  String   @unique
+  addedAt DateTime @default(now())
+  notes   String?
+}
+
+model RobinhoodPrice {
+  id        Int      @id @default(autoincrement())
+  symbol    String
+  price     Float
+  fetchedAt DateTime @default(now())
+  source    String
+
+  @@index([symbol])
+}

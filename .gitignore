@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+.chatid
+*.db
+*.log
+.DS_Store
+
+# build artifacts
+*.tsbuildinfo
