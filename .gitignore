@@ -11,3 +11,6 @@ dist/
 
 # binance listing cache (immutable, regenerated)
 .binance-listings-cache.json
+*.db-journal
+*.db-wal
+*.db-shm
