@@ -1,5 +1,6 @@
 import { parseDexScreenerUrl, fetchPairByAddress, type DexPair } from "../sources/dexscreener.js";
 import { checkSolanaToken } from "../sources/rugcheck.js";
+import { simulateSell } from "../sources/jupiter.js";
 import { scorePool } from "../scoring/score.js";
 
 // Kullanicinin yapistirdigi DexScreener linkini analiz et -> HTML rapor (Telegram).
@@ -18,13 +19,27 @@ export async function analyzeUrl(input: string): Promise<string> {
 
   // Guvenlik + skor SADECE Solana (Phase 1). EVM Phase 2'de.
   if (pair.chainId === "solana") {
-    const { signals } = await checkSolanaToken(pair);
+    const { signals, decimals } = await checkSolanaToken(pair);
+
+    // Manuel sorguda satis testini HER ZAMAN yap — Ozan bu raporu karar vermek
+    // icin okuyor, "satabiliyor muyuz" sorusunun tahmini degil olcumu lazim.
+    if (signals.honeypot !== "fail") {
+      const sim = await simulateSell(
+        pair.baseToken.address,
+        decimals,
+        pair.priceUsd ? Number(pair.priceUsd) : null
+      );
+      signals.honeypot = sim.result;
+      signals.sellPriceImpactPct = sim.priceImpactPct;
+    }
+
     const r = scorePool(signals);
     const head = r.hardFail
-      ? `🔴 <b>${escapeHtml(pair.baseToken.symbol)}</b> — ⛔ HARD-FAIL (skor ${r.score})`
+      ? `🔴 <b>${escapeHtml(pair.baseToken.symbol)}</b> — ⛔ ELENDI (skor ${r.score})`
       : `${scoreEmoji(r.score)} <b>${escapeHtml(pair.baseToken.symbol)}</b> — skor <b>${r.score}</b>/100`;
+    const conf = `<i>veri guveni: %${Math.round(r.confidence * 100)}</i>`;
     const reasons = r.reasons.map((x) => `• ${escapeHtml(x)}`).join("\n");
-    return `${head}\n${market}\n\n<b>Analiz</b>\n${reasons}\n\n${link(pair)}`;
+    return `${head}\n${market}\n\n<b>Analiz</b> ${conf}\n${reasons}\n\n${link(pair)}`;
   }
 
   return (

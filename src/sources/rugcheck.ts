@@ -28,12 +28,15 @@ interface RugcheckFull {
     lp?: { lpLockedPct?: number };
   }[];
   totalMarketLiquidity?: number;
+  totalHolders?: number;
+  token?: { decimals?: number };
   risks?: { name: string; level: string }[];
 }
 
 export interface RugcheckResult {
   signals: SafetySignals;
   raw: unknown;
+  decimals: number | null; // Jupiter satis simulasyonunun tutari icin gerekli
 }
 
 // Solana token'ini tarayip ortak SafetySignals'e normalize et.
@@ -50,8 +53,17 @@ export async function checkSolanaToken(pair: DexPair): Promise<RugcheckResult> {
     mintAuthorityActive: null,
     freezeAuthorityActive: null,
     topHolderPct: null,
-    honeypot: "unknown", // RugCheck honeypot simulasyonu vermez -> unknown
+    top10HolderPct: null,
+    holderCount: null,
+    honeypot: "unknown", // Jupiter satis testi scan.ts'te doldurur
+    sellPriceImpactPct: null,
+    // DexScreener'dan gelen pazar/davranis sinyalleri
     volumeUsd5m: pair.volume?.m5 ?? null,
+    volumeUsd1h: pair.volume?.h1 ?? null,
+    buys1h: pair.txns?.h1?.buys ?? null,
+    sells1h: pair.txns?.h1?.sells ?? null,
+    pairCreatedAt: pair.pairCreatedAt ?? null,
+    fdvUsd: pair.fdv ?? pair.marketCap ?? null,
   };
 
   if (full) {
@@ -84,8 +96,16 @@ export async function checkSolanaToken(pair: DexPair): Promise<RugcheckResult> {
         !(h.address && marketAddrs.has(h.address))
     );
     if (holders.length) {
-      const max = Math.max(...holders.map((h) => h.pct ?? 0));
-      signals.topHolderPct = max / 100; // 0..100 -> 0..1
+      const pcts = holders.map((h) => h.pct ?? 0).sort((a, b) => b - a);
+      signals.topHolderPct = pcts[0] / 100; // 0..100 -> 0..1
+      // Ilk 10'un TOPLAMI: tek cuzdan dusuk gorunup supply 10 cuzdana
+      // dagitilmis olabilir (bundle/sniper kalibi). top-1 bunu kacirir.
+      const sum10 = pcts.slice(0, 10).reduce((a, b) => a + b, 0);
+      signals.top10HolderPct = Math.min(1, sum10 / 100);
+    }
+
+    if (typeof full.totalHolders === "number") {
+      signals.holderCount = full.totalHolders;
     }
 
     // RugCheck "danger" seviyesinde honeypot benzeri risk isaretlerse fail say
@@ -95,5 +115,5 @@ export async function checkSolanaToken(pair: DexPair): Promise<RugcheckResult> {
     if (danger) signals.honeypot = "fail";
   }
 
-  return { signals, raw: full };
+  return { signals, raw: full, decimals: full?.token?.decimals ?? null };
 }

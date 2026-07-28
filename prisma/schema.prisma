@@ -36,10 +36,22 @@ model Check {
   checkedAt            DateTime @default(now())
   liquidityLocked      Boolean?
   liquidityLockPct     Float?
+  liquidityUsd         Float?
   ownershipRenounced   Boolean?
+  mintAuthorityActive  Boolean?
+  freezeAuthorityActive Boolean?
   topHolderPct         Float?
+  top10HolderPct       Float?
+  holderCount          Int?
   honeypotResult       String?  // pass | fail | unknown
+  sellPriceImpact      Float?   // $100 satista fiyat etkisi 0..1
   volumeLiquidityRatio Float?
+  buys1h               Int?
+  sells1h              Int?
+  fdvUsd               Float?
+  pairCreatedAt        DateTime?
+  confidence           Float?   // 0..1 — kac kritik sinyal cozuldu
+  hardFail             Boolean? // gate'e takildi mi (alert atilmadi)
   rawResponse          String?  // JSON string — ham API cevabi (SQLite Json desteklemez)
 
   score Score?

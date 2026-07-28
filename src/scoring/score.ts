@@ -1,49 +1,83 @@
-import type { SafetySignals, ScoreResult, ScoreBreakdown } from "./types.js";
+import type {
+  SafetySignals,
+  ScoreResult,
+  ScoreBreakdown,
+  ScoringConfig,
+} from "./types.js";
+import { DEFAULT_SCORING_CONFIG } from "./types.js";
 
-// v1 agirliklar (toplam 100).
+// v2 agirliklar (toplam 100).
+// v1'e gore: likidite BUYUKLUGU puanlanir, dagilim top-10'u da sayar,
+// organiklik alis/satis dengesini icerir, olgunluk yeni faktor.
 const WEIGHTS = {
-  liquidity: 25,
-  authority: 20,
-  distribution: 20,
-  honeypot: 20,
-  organic: 15,
+  liquidity: 22,   // kilit (%60) + derinlik (%40)
+  authority: 15,
+  distribution: 20, // top-1 (%60) + top-10 (%40)
+  honeypot: 22,     // gercek satis rotasi testi
+  organic: 13,      // hacim/likidite (%50) + alis-satis dengesi (%50)
+  maturity: 8,      // havuz yasi (%60) + FDV/likidite makullugu (%40)
 } as const;
 
-// Bir cuzdan bunun uzerinde tutuyorsa skor tavani uygulanir.
-const TOP_HOLDER_HARD_CAP_PCT = 0.2; // %20
-const TOP_HOLDER_CAP_SCORE = 30;
+// Likidite derinligi log olcekte puanlanir: $2k taban, $500k tavan.
+// Memecoin'de $5k ile $50k arasindaki fark, $500k ile $5M arasindakinden onemli.
+const LIQ_FLOOR_USD = 2_000;
+const LIQ_CEIL_USD = 500_000;
 
 // Saf fonksiyon: I/O yok, sadece SafetySignals -> ScoreResult.
 // Test edilebilir cekirdek. Poller/DB/Telegram bunu cagirir.
-export function scorePool(s: SafetySignals): ScoreResult {
+export function scorePool(
+  s: SafetySignals,
+  cfg: ScoringConfig = DEFAULT_SCORING_CONFIG
+): ScoreResult {
   const reasons: string[] = [];
+  const confidence = computeConfidence(s);
 
-  // --- Hard gate: honeypot satamiyorsan her sey anlamsiz ---
-  if (s.honeypot === "fail") {
+  // ================= HARD GATE'LER =================
+  // Bunlardan biri tetiklenirse skor 0 ve alert ATILMAZ. Elegin ilk katmani:
+  // "bu coin degerlendirmeye bile deger mi".
+  const gate = hardGate(s, cfg);
+  if (gate) {
     return {
       score: 0,
-      breakdown: { liquidity: 0, authority: 0, distribution: 0, honeypot: 0, organic: 0 },
+      breakdown: zeroBreakdown(),
       hardFail: true,
-      reasons: ["HONEYPOT: satis simulasyonu basarisiz — alert atilmaz"],
+      confidence,
+      reasons: [gate],
     };
   }
 
-  const b: ScoreBreakdown = { liquidity: 0, authority: 0, distribution: 0, honeypot: 0, organic: 0 };
+  const b = zeroBreakdown();
 
-  // --- Likidite kilidi (0..1 * agirlik) ---
+  // --- Likidite: kilit (%60) + derinlik (%40) ---
   {
-    let f = 0;
+    let lockF = 0;
     if (s.liquidityLocked === true) {
-      f = s.liquidityLockPct != null ? clamp01(s.liquidityLockPct) : 0.8;
+      lockF = s.liquidityLockPct != null ? clamp01(s.liquidityLockPct) : 0.8;
       reasons.push(`Likidite kilitli (${pct(s.liquidityLockPct ?? 0.8)})`);
     } else if (s.liquidityLocked === false) {
-      f = 0;
-      reasons.push("Likidite KILITSIZ");
+      lockF = 0;
+      reasons.push("Likidite KILITSIZ — cekilebilir");
     } else {
-      f = 0; // bilinmiyor -> guvenli tarafta sifir
+      lockF = 0; // bilinmiyor -> guvenli tarafta sifir
       reasons.push("Likidite kilidi bilinmiyor");
     }
-    b.liquidity = round(f * WEIGHTS.liquidity);
+
+    let depthF = 0;
+    if (s.liquidityUsd != null && s.liquidityUsd > 0) {
+      depthF = logScale(s.liquidityUsd, LIQ_FLOOR_USD, LIQ_CEIL_USD);
+      reasons.push(`Likidite ${usd(s.liquidityUsd)} (derinlik ${pct(depthF)})`);
+    } else if (s.sellPriceImpactPct != null) {
+      // Likidite rakami yok (pumpfun bonding curve). Ama $100'luk satisin fiyat
+      // etkisi derinligin DOGRUDAN olcumu — bildirilmis bir rakamdan daha durust.
+      depthF = clamp01(1 - s.sellPriceImpactPct / 0.15);
+      reasons.push(
+        `Likidite rakami yok — satis etkisinden olculdu (${pct(s.sellPriceImpactPct)} etki)`
+      );
+    } else {
+      reasons.push("Likidite olculemedi");
+    }
+
+    b.liquidity = round((lockF * 0.6 + depthF * 0.4) * WEIGHTS.liquidity);
   }
 
   // --- Yetki: renounce (EVM) + mint/freeze authority (Solana) ---
@@ -52,9 +86,13 @@ export function scorePool(s: SafetySignals): ScoreResult {
     const parts: string[] = [];
     if (s.ownershipRenounced === false) { f -= 0.6; parts.push("owner renounce DEGIL"); }
     else if (s.ownershipRenounced === true) { parts.push("owner renounce"); }
-    if (s.mintAuthorityActive === true) { f -= 0.5; parts.push("mint authority ACIK"); }
-    if (s.freezeAuthorityActive === true) { f -= 0.5; parts.push("freeze authority ACIK"); }
-    if (s.ownershipRenounced == null && s.mintAuthorityActive == null && s.freezeAuthorityActive == null) {
+    if (s.mintAuthorityActive === true) { f -= 0.5; parts.push("mint authority ACIK — sinirsiz basim"); }
+    if (s.freezeAuthorityActive === true) { f -= 0.5; parts.push("freeze authority ACIK — cuzdan dondurulabilir"); }
+    if (
+      s.ownershipRenounced == null &&
+      s.mintAuthorityActive == null &&
+      s.freezeAuthorityActive == null
+    ) {
       f = 0; parts.push("yetki bilgisi yok");
     }
     f = clamp01(f);
@@ -62,53 +100,224 @@ export function scorePool(s: SafetySignals): ScoreResult {
     b.authority = round(f * WEIGHTS.authority);
   }
 
-  // --- Dagilim: top holder yogunlugu ---
+  // --- Dagilim: top-1 (%60) + top-10 (%40) ---
+  // v1 sadece top-1'e bakiyordu: 10 cuzdan %8'er tutunca (toplam %80)
+  // dagilim tam puan aliyordu. Bundle/sniper kalibi tam olarak buydu.
   {
-    let f: number;
+    let topF = 0;
     if (s.topHolderPct == null) {
-      f = 0;
       reasons.push("Top holder bilinmiyor");
     } else {
-      // 0% -> 1.0, %50+ -> 0. Lineer.
-      f = clamp01(1 - s.topHolderPct / 0.5);
-      reasons.push(`Top holder ${pct(s.topHolderPct)}`);
+      topF = clamp01(1 - s.topHolderPct / 0.5); // %0 -> 1.0, %50+ -> 0
+      reasons.push(`En buyuk cuzdan ${pct(s.topHolderPct)}`);
     }
-    b.distribution = round(f * WEIGHTS.distribution);
+
+    let top10F = 0;
+    if (s.top10HolderPct == null) {
+      reasons.push("Ilk 10 cuzdan bilinmiyor");
+    } else {
+      // %20 toplam -> 1.0, %80+ -> 0. Aradaki bant lineer.
+      top10F = clamp01((0.8 - s.top10HolderPct) / 0.6);
+      reasons.push(`Ilk 10 cuzdan toplam ${pct(s.top10HolderPct)}`);
+    }
+
+    if (s.holderCount != null) {
+      reasons.push(`${s.holderCount} holder`);
+    }
+
+    b.distribution = round((topF * 0.6 + top10F * 0.4) * WEIGHTS.distribution);
   }
 
-  // --- Honeypot: pass tam puan, unknown yari puan ---
+  // --- Satis testi: gercek Jupiter rota simulasyonu ---
+  // v1'de bu deger HER ZAMAN "unknown" idi ve 0.5 katsayi aliyordu -> her coine
+  // bedava 10 puan. Artik unknown 0.3'e dusuruldu: bilmemek odul degil.
   {
-    const f = s.honeypot === "pass" ? 1 : 0.5;
-    if (s.honeypot === "pass") reasons.push("Satis testi PASS");
-    else reasons.push("Satis testi bilinmiyor");
+    let f: number;
+    if (s.honeypot === "pass") {
+      f = 1;
+      const imp = s.sellPriceImpactPct;
+      if (imp != null && imp > 0.15) {
+        f = 0.7; // rota var ama cikis pahali
+        reasons.push(`Satis rotasi var ama fiyat etkisi yuksek (${pct(imp)}) — cikis pahali`);
+      } else if (imp != null) {
+        reasons.push(`Satis testi PASS (fiyat etkisi ${pct(imp)})`);
+      } else {
+        reasons.push("Satis testi PASS");
+      }
+    } else {
+      f = 0.3;
+      reasons.push("Satis testi dogrulanamadi — rota bulunamadi");
+    }
     b.honeypot = round(f * WEIGHTS.honeypot);
   }
 
-  // --- Organik hacim/likidite orani (wash-trading kokusu) ---
+  // --- Organiklik: hacim/likidite (%50) + alis-satis dengesi (%50) ---
   {
-    let f = 0.5; // veri yoksa notr
+    let volF = 0.5; // veri yoksa notr
     if (s.volumeUsd5m != null && s.liquidityUsd != null && s.liquidityUsd > 0) {
       const ratio = s.volumeUsd5m / s.liquidityUsd;
-      // saglikli bant ~0.05..2. Cok dusuk = olu, cok yuksek = wash.
-      if (ratio < 0.02) { f = 0.3; reasons.push("Hacim cok dusuk (olu)"); }
-      else if (ratio > 5) { f = 0.1; reasons.push(`Hacim/likidite asiri yuksek (${ratio.toFixed(1)}x) — wash suphesi`); }
-      else if (ratio > 2) { f = 0.6; reasons.push(`Hacim/likidite yuksek (${ratio.toFixed(1)}x)`); }
-      else { f = 1; reasons.push(`Hacim/likidite saglikli (${ratio.toFixed(2)}x)`); }
+      // saglikli bant ~0.02..2. Cok dusuk = olu, cok yuksek = wash.
+      if (ratio < 0.02) { volF = 0.3; reasons.push("Hacim cok dusuk (olu havuz)"); }
+      else if (ratio > 5) { volF = 0.1; reasons.push(`Hacim/likidite asiri (${ratio.toFixed(1)}x) — wash suphesi`); }
+      else if (ratio > 2) { volF = 0.6; reasons.push(`Hacim/likidite yuksek (${ratio.toFixed(1)}x)`); }
+      else { volF = 1; reasons.push(`Hacim/likidite saglikli (${ratio.toFixed(2)}x)`); }
     } else {
       reasons.push("Hacim/likidite verisi eksik");
     }
-    b.organic = round(f * WEIGHTS.organic);
+
+    let txF = 0.5;
+    const buys = s.buys1h;
+    const sells = s.sells1h;
+    if (buys != null && sells != null && buys + sells > 0) {
+      const sellShare = sells / (buys + sells);
+      if (sellShare >= 0.3 && sellShare <= 0.7) {
+        txF = 1;
+        reasons.push(`Alis/satis dengeli (${buys}/${sells}, 1sa)`);
+      } else if (sellShare >= 0.15 && sellShare <= 0.85) {
+        txF = 0.6;
+        reasons.push(`Alis/satis dengesiz (${buys}/${sells}, 1sa)`);
+      } else {
+        txF = 0.25;
+        reasons.push(`Alis/satis cok dengesiz (${buys}/${sells}, 1sa)`);
+      }
+    } else {
+      reasons.push("Alis/satis verisi yok");
+    }
+
+    b.organic = round((volF * 0.5 + txF * 0.5) * WEIGHTS.organic);
   }
 
-  let score = round(b.liquidity + b.authority + b.distribution + b.honeypot + b.organic);
+  // --- Olgunluk: havuz yasi (%60) + FDV/likidite makullugu (%40) ---
+  {
+    let ageF = 0.5;
+    if (s.pairCreatedAt != null && s.pairCreatedAt > 0) {
+      const ageMin = (Date.now() - s.pairCreatedAt) / 60_000;
+      if (ageMin < 15) { ageF = 0.2; reasons.push(`Havuz ${Math.max(0, Math.round(ageMin))} dk — cok taze, veri oturmamis`); }
+      else if (ageMin < 60) { ageF = 0.5; reasons.push(`Havuz ${Math.round(ageMin)} dk`); }
+      else if (ageMin < 360) { ageF = 0.8; reasons.push(`Havuz ${(ageMin / 60).toFixed(1)} saat`); }
+      else { ageF = 1; reasons.push(`Havuz ${(ageMin / 60 / 24).toFixed(1)} gun`); }
+    } else {
+      reasons.push("Havuz yasi bilinmiyor");
+    }
 
-  // --- Hard cap: tek cuzdan cok tutuyorsa tavan uygula ---
-  if (s.topHolderPct != null && s.topHolderPct > TOP_HOLDER_HARD_CAP_PCT && score > TOP_HOLDER_CAP_SCORE) {
-    reasons.push(`Top holder >%${TOP_HOLDER_HARD_CAP_PCT * 100} — skor ${TOP_HOLDER_CAP_SCORE}'a kapatildi`);
-    score = TOP_HOLDER_CAP_SCORE;
+    let fdvF = 0.5;
+    if (s.fdvUsd != null && s.liquidityUsd != null && s.liquidityUsd > 0) {
+      const r = s.fdvUsd / s.liquidityUsd;
+      if (r <= 50) { fdvF = 1; reasons.push(`FDV/likidite ${r.toFixed(0)}x — makul`); }
+      else if (r <= 150) { fdvF = 0.6; reasons.push(`FDV/likidite ${r.toFixed(0)}x — yuksek`); }
+      else { fdvF = 0.2; reasons.push(`FDV/likidite ${r.toFixed(0)}x — sisirilmis degerleme`); }
+    }
+
+    b.maturity = round((ageF * 0.6 + fdvF * 0.4) * WEIGHTS.maturity);
   }
 
-  return { score, breakdown: b, hardFail: false, reasons };
+  let score = round(
+    b.liquidity + b.authority + b.distribution + b.honeypot + b.organic + b.maturity
+  );
+
+  // ================= TAVANLAR =================
+  // Puan toplandiktan sonra uygulanir: tek bir agir kirmizi bayrak,
+  // diger faktorlerin yuksek puanini gecersiz kilar.
+
+  // "Rug dugmeleri" — her biri projeyi tek hamlede oldurebilir. $150k likidite ve
+  // 1200 holder, mint authority ACIK oldugu gercegini telafi etmez.
+  if (s.freezeAuthorityActive === true && score > cfg.freezeAuthorityCapScore) {
+    reasons.push(`Freeze authority acik — skor ${cfg.freezeAuthorityCapScore}'a kapatildi`);
+    score = cfg.freezeAuthorityCapScore;
+  }
+  if (s.mintAuthorityActive === true && score > cfg.mintAuthorityCapScore) {
+    reasons.push(`Mint authority acik — skor ${cfg.mintAuthorityCapScore}'a kapatildi`);
+    score = cfg.mintAuthorityCapScore;
+  }
+  if (s.liquidityLocked === false && score > cfg.unlockedLpCapScore) {
+    reasons.push(`Likidite kilitsiz — skor ${cfg.unlockedLpCapScore}'a kapatildi`);
+    score = cfg.unlockedLpCapScore;
+  }
+
+  // Likidite rakami dogrulanamadi (pumpfun bonding curve): satis testi gecse bile
+  // tam puan verilmez — olculen sey rota, havuzun kalinligi degil.
+  if (s.liquidityUsd == null && score > cfg.unverifiedLiquidityCapScore) {
+    reasons.push(
+      `Likidite dogrulanamadi — skor ${cfg.unverifiedLiquidityCapScore}'a kapatildi`
+    );
+    score = cfg.unverifiedLiquidityCapScore;
+  }
+
+  if (s.topHolderPct != null && s.topHolderPct > cfg.topHolderCapPct && score > cfg.topHolderCapScore) {
+    reasons.push(`Tek cuzdan >${pct(cfg.topHolderCapPct)} — skor ${cfg.topHolderCapScore}'a kapatildi`);
+    score = cfg.topHolderCapScore;
+  }
+  if (s.top10HolderPct != null && s.top10HolderPct > cfg.top10CapPct && score > cfg.top10CapScore) {
+    reasons.push(`Ilk 10 cuzdan >${pct(cfg.top10CapPct)} — skor ${cfg.top10CapScore}'a kapatildi`);
+    score = cfg.top10CapScore;
+  }
+  // Bilmemek temiz olmak degildir: veri cogunlukla cozulemediyse skor tavanlanir.
+  if (confidence < cfg.minConfidence && score > cfg.lowConfidenceCapScore) {
+    reasons.push(
+      `Veri guveni dusuk (${pct(confidence)}) — skor ${cfg.lowConfidenceCapScore}'a kapatildi`
+    );
+    score = cfg.lowConfidenceCapScore;
+  }
+
+  return { score, breakdown: b, hardFail: false, confidence, reasons };
+}
+
+// Hard gate: tetiklenirse skor 0, alert yok. Sebep metni doner, temizse null.
+function hardGate(s: SafetySignals, cfg: ScoringConfig): string | null {
+  if (s.honeypot === "fail") {
+    return "HONEYPOT: satis rotasi yok ama alis var — alert atilmaz";
+  }
+  // Likidite esigi: cikamayacagin havuza girmenin anlami yok.
+  if (s.liquidityUsd != null && s.liquidityUsd < cfg.minLiquidityUsd) {
+    return `Likidite ${usd(s.liquidityUsd)} < ${usd(cfg.minLiquidityUsd)} esigi — cikis yok`;
+  }
+  // Likidite rakami YOK ve satis testi de gecmedi -> cikis konusunda elimizde
+  // hicbir kanit yok. Ikisinden en az biri olmali.
+  if (s.liquidityUsd == null && s.honeypot !== "pass") {
+    return "Ne likidite rakami ne gecerli satis rotasi var — cikis dogrulanamadi";
+  }
+  // Sisirilmis degerleme: FDV likiditenin bu kadar ustundeyse satis fiyati cokertir.
+  if (
+    s.fdvUsd != null &&
+    s.liquidityUsd != null &&
+    s.liquidityUsd > 0 &&
+    s.fdvUsd / s.liquidityUsd > cfg.maxFdvLiqRatio
+  ) {
+    return `FDV/likidite ${(s.fdvUsd / s.liquidityUsd).toFixed(0)}x — cikis likiditesi yok`;
+  }
+  // Cok alis, sifir satis: honeypot'un en durust davranissal imzasi.
+  if (s.buys1h != null && s.sells1h === 0 && s.buys1h >= cfg.noSellMinBuys) {
+    return `1 saatte ${s.buys1h} alis, 0 satis — honeypot supheli`;
+  }
+  return null;
+}
+
+// Kritik sinyallerin kaci gercekten cozuldu? 0..1.
+// Amac: API 404 verdiginde "bilmiyoruz"un "temiz"le ayni puani almasini engellemek.
+function computeConfidence(s: SafetySignals): number {
+  const checks: boolean[] = [
+    s.liquidityLocked != null,
+    s.liquidityUsd != null,
+    s.mintAuthorityActive != null || s.ownershipRenounced != null,
+    s.topHolderPct != null,
+    s.top10HolderPct != null,
+    s.honeypot !== "unknown",
+    s.buys1h != null && s.sells1h != null,
+    s.pairCreatedAt != null,
+  ];
+  const resolved = checks.filter(Boolean).length;
+  return round(resolved / checks.length);
+}
+
+function zeroBreakdown(): ScoreBreakdown {
+  return { liquidity: 0, authority: 0, distribution: 0, honeypot: 0, organic: 0, maturity: 0 };
+}
+
+// x'i [lo, hi] arasinda logaritmik olarak 0..1'e esler.
+function logScale(x: number, lo: number, hi: number): number {
+  if (x <= lo) return 0;
+  if (x >= hi) return 1;
+  return clamp01((Math.log10(x) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)));
 }
 
 function clamp01(n: number): number {
@@ -119,4 +328,7 @@ function round(n: number): number {
 }
 function pct(n: number): string {
   return `%${Math.round(n * 100)}`;
+}
+function usd(n: number): string {
+  return `$${Math.round(n).toLocaleString("en-US")}`;
 }

@@ -1,11 +1,26 @@
 import { prisma } from "../db/client.js";
 import { fetchNewTokenAddresses, fetchTopPair, type DexPair } from "../sources/dexscreener.js";
 import { checkSolanaToken } from "../sources/rugcheck.js";
+import { simulateSell } from "../sources/jupiter.js";
 import { scorePool } from "../scoring/score.js";
+import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from "../scoring/types.js";
 import { sendAlert } from "../notify/telegram.js";
 import { sleep } from "../sources/http.js";
 
 const THRESHOLD = Number(process.env.ALERT_SCORE_THRESHOLD ?? 70);
+
+// Esikler env'den ayarlanabilir — kalibrasyon icin kodu degistirmeye gerek yok.
+const SCORING: ScoringConfig = {
+  ...DEFAULT_SCORING_CONFIG,
+  minLiquidityUsd: num(process.env.MIN_LIQUIDITY_USD, DEFAULT_SCORING_CONFIG.minLiquidityUsd),
+  maxFdvLiqRatio: num(process.env.MAX_FDV_LIQ_RATIO, DEFAULT_SCORING_CONFIG.maxFdvLiqRatio),
+  minConfidence: num(process.env.MIN_CONFIDENCE, DEFAULT_SCORING_CONFIG.minConfidence),
+};
+
+function num(v: string | undefined, fallback: number): number {
+  const n = Number(v);
+  return Number.isFinite(n) && v !== undefined && v !== "" ? n : fallback;
+}
 
 // Ayni pool'u kisa surede tekrar taramamak icin bellek cache'i.
 const recentlyChecked = new Map<string, number>();
@@ -41,8 +56,26 @@ export async function scanSolanaOnce(): Promise<void> {
 
 // Tek bir pair'i uctan uca isle.
 async function processPair(pair: DexPair): Promise<void> {
-  const { signals, raw } = await checkSolanaToken(pair);
-  const result = scorePool(signals);
+  const { signals, raw, decimals } = await checkSolanaToken(pair);
+
+  // Satis testi PAHALI (1-2 ag istegi). Nasil olsa hard gate'e takilacak
+  // coinler icin harcamayiz: likidite esigin altindaysa veya RugCheck zaten
+  // "satilamaz" dediyse Jupiter'i hic cagirmayiz.
+  const alreadyDoomed =
+    signals.honeypot === "fail" ||
+    (signals.liquidityUsd != null && signals.liquidityUsd < SCORING.minLiquidityUsd);
+
+  if (!alreadyDoomed) {
+    const sim = await simulateSell(
+      pair.baseToken.address,
+      decimals,
+      pair.priceUsd ? Number(pair.priceUsd) : null
+    );
+    signals.honeypot = sim.result;
+    signals.sellPriceImpactPct = sim.priceImpactPct;
+  }
+
+  const result = scorePool(signals, SCORING);
 
   // pool upsert
   const pool = await prisma.pool.upsert({
@@ -64,13 +97,25 @@ async function processPair(pair: DexPair): Promise<void> {
       poolId: pool.id,
       liquidityLocked: signals.liquidityLocked,
       liquidityLockPct: signals.liquidityLockPct,
+      liquidityUsd: signals.liquidityUsd,
       ownershipRenounced: signals.ownershipRenounced,
+      mintAuthorityActive: signals.mintAuthorityActive,
+      freezeAuthorityActive: signals.freezeAuthorityActive,
       topHolderPct: signals.topHolderPct,
+      top10HolderPct: signals.top10HolderPct,
+      holderCount: signals.holderCount,
       honeypotResult: signals.honeypot,
+      sellPriceImpact: signals.sellPriceImpactPct,
       volumeLiquidityRatio:
         signals.volumeUsd5m != null && signals.liquidityUsd
           ? signals.volumeUsd5m / signals.liquidityUsd
           : null,
+      buys1h: signals.buys1h,
+      sells1h: signals.sells1h,
+      fdvUsd: signals.fdvUsd,
+      pairCreatedAt: signals.pairCreatedAt != null ? new Date(signals.pairCreatedAt) : null,
+      confidence: result.confidence,
+      hardFail: result.hardFail,
       rawResponse: raw != null ? JSON.stringify(raw) : null,
       score: {
         create: {

@@ -1,0 +1,13 @@
+-- AlterTable
+ALTER TABLE "Check" ADD COLUMN "buys1h" INTEGER;
+ALTER TABLE "Check" ADD COLUMN "confidence" REAL;
+ALTER TABLE "Check" ADD COLUMN "fdvUsd" REAL;
+ALTER TABLE "Check" ADD COLUMN "freezeAuthorityActive" BOOLEAN;
+ALTER TABLE "Check" ADD COLUMN "hardFail" BOOLEAN;
+ALTER TABLE "Check" ADD COLUMN "holderCount" INTEGER;
+ALTER TABLE "Check" ADD COLUMN "liquidityUsd" REAL;
+ALTER TABLE "Check" ADD COLUMN "mintAuthorityActive" BOOLEAN;
+ALTER TABLE "Check" ADD COLUMN "pairCreatedAt" DATETIME;
+ALTER TABLE "Check" ADD COLUMN "sellPriceImpact" REAL;
+ALTER TABLE "Check" ADD COLUMN "sells1h" INTEGER;
+ALTER TABLE "Check" ADD COLUMN "top10HolderPct" REAL;

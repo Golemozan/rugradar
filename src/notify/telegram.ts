@@ -99,15 +99,32 @@ function loadChatId(): string | null {
 
 function formatAlert(pair: DexPair, r: ScoreResult): string {
   const sym = pair.baseToken.symbol;
-  const liq = pair.liquidity?.usd ? `$${Math.round(pair.liquidity.usd).toLocaleString()}` : "?";
+  const liq = pair.liquidity?.usd ? `$${fmt(pair.liquidity.usd)}` : "?";
+  const mc = pair.marketCap ?? pair.fdv;
+  const t1 = pair.txns?.h1;
   const url = `https://dexscreener.com/${pair.chainId}/${pair.pairAddress}`;
   const reasons = r.reasons.map((x) => `• ${escapeHtml(x)}`).join("\n");
+
+  // Faktor kirilimi: skorun NEREDEN geldigi tek bakista gorunsun.
+  const b = r.breakdown;
+  const bars =
+    `likidite ${b.liquidity} | yetki ${b.authority} | dagilim ${b.distribution}\n` +
+    `satis ${b.honeypot} | organik ${b.organic} | olgunluk ${b.maturity}`;
+
   return (
-    `🟢 <b>${escapeHtml(sym)}</b> — skor <b>${r.score}</b>/100\n` +
-    `chain: ${pair.chainId} | dex: ${pair.dexId} | likidite: ${liq}\n\n` +
+    `🟢 <b>${escapeHtml(sym)}</b> — skor <b>${r.score}</b>/100 ` +
+    `<i>(guven %${Math.round(r.confidence * 100)})</i>\n` +
+    `${pair.chainId} · ${escapeHtml(pair.dexId)} · likidite ${liq}` +
+    `${mc ? ` · mcap $${fmt(mc)}` : ""}\n` +
+    `${t1 ? `1sa islem: ${t1.buys ?? 0} alis / ${t1.sells ?? 0} satis\n` : ""}` +
+    `\n<b>Kirilim</b>\n${bars}\n\n` +
     `${reasons}\n\n` +
     `<a href="${url}">DexScreener'da ac</a>`
   );
+}
+
+function fmt(n: number): string {
+  return Math.round(n).toLocaleString("en-US");
 }
 
 function escapeHtml(s: string): string {
