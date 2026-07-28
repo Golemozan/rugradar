@@ -1,5 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
 import type { BinanceListingRow, BinanceListingsResponse } from "./types.ts";
+import {
+  Tile,
+  EmptyState,
+  ErrorNote,
+  TableSkeleton,
+  TableScroll,
+  Perf,
+} from "./ui.tsx";
 
 const REFRESH_MS = 15000; // Binance verisi worker'da 10dk'da bir tazeleniyor; panel sik cekmesin
 
@@ -7,17 +15,22 @@ export function BinanceListings() {
   const [rows, setRows] = useState<BinanceListingRow[]>([]);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [ok, setOk] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     try {
-      const r: BinanceListingsResponse = await fetch("/api/binance-listings").then((x) => x.json());
+      const res = await fetch("/api/binance-listings");
+      if (!res.ok) throw new Error(`worker ${res.status} döndü`);
+      const r: BinanceListingsResponse = await res.json();
       setRows(Array.isArray(r.rows) ? r.rows : []);
       setUpdatedAt(r.updatedAt);
       setRefreshing(!!r.refreshing);
-      setOk(true);
-    } catch {
-      setOk(false);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "bilinmeyen hata");
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -31,9 +44,11 @@ export function BinanceListings() {
 
   return (
     <>
+      {error ? <ErrorNote message={`${error} — worker çalışıyor mu? (:3000)`} /> : null}
+
       <section className="tiles">
-        <Tile label="Yeni coin (6 ay)" value={String(rows.length)} sub="Binance USDT" />
-        <Tile label="Listemeden beri düşen" value={String(down)} sub={`${rows.length} coinden`} />
+        <Tile label="Yeni coin (6 ay)" value={rows.length} sub="Binance USDT" />
+        <Tile label="Listelemeden beri düşen" value={down} sub={`${rows.length} coinden`} />
         <Tile
           label="En sert düşüş"
           value={rows.length ? `${Math.round(rows[0].sinceListingPct)}%` : "—"}
@@ -48,16 +63,19 @@ export function BinanceListings() {
 
       <div className="card">
         <h2>Son 6 ayda listelenen coinler · en çok düşen üstte</h2>
-        {rows.length === 0 ? (
-          <div className="empty">
-            {refreshing
-              ? "Binance taranıyor — ilk turda tüm semboller tarihleniyor, birkaç dakika sürebilir."
-              : ok
-                ? "Henüz veri yok — worker taradıkça buraya düşer."
-                : "worker'a bağlanılamadı (:3000 açık mı?)"}
-          </div>
+        {loading ? (
+          <TableSkeleton rows={6} cols={6} />
+        ) : rows.length === 0 ? (
+          <EmptyState
+            title={refreshing ? "Binance taranıyor" : "Henüz veri yok"}
+            hint={
+              refreshing
+                ? "İlk turda tüm semboller tarihleniyor — bir dakika kadar sürer, sonra cache'ten gelir."
+                : "Worker taradıkça buraya düşer. Çalışmıyorsa RugRadar.cmd'yi başlat."
+            }
+          />
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <TableScroll>
             <table>
               <thead>
                 <tr>
@@ -81,46 +99,25 @@ export function BinanceListings() {
                     <td><Perf v={r.d30Pct} /></td>
                     <td><Perf v={r.d7Pct} /></td>
                     <td><Perf v={r.d24Pct} /></td>
-                    <td>
+                    <td className="row-actions">
                       <a
-                        className="dex"
+                        className="icon-btn link"
                         href={`https://www.binance.com/en/trade/${r.base}_USDT`}
                         target="_blank"
                         rel="noreferrer"
+                        aria-label={`${r.base} Binance'te aç`}
                       >
-                        aç ↗
+                        ↗
                       </a>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableScroll>
         )}
       </div>
     </>
-  );
-}
-
-// Performans yuzdesi — renk + yon oku (renk tek basina anlam tasimasin diye ok da var).
-function Perf({ v }: { v: number | null }) {
-  if (v == null) return <span className="chain">—</span>;
-  const color = v > 0 ? "var(--good)" : v < 0 ? "var(--critical)" : "var(--muted)";
-  const arrow = v > 0 ? "▲" : v < 0 ? "▼" : "•";
-  return (
-    <span style={{ color, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
-      {arrow} {Math.abs(v).toFixed(1)}%
-    </span>
-  );
-}
-
-function Tile({ label, value, sub }: { label: string; value: string; sub: string }) {
-  return (
-    <div className="tile">
-      <div className="label">{label}</div>
-      <div className="value">{value}</div>
-      <div className="sub">{sub}</div>
-    </div>
   );
 }
 

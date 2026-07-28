@@ -116,6 +116,7 @@ async function processPair(pair: DexPair): Promise<void> {
       pairCreatedAt: signals.pairCreatedAt != null ? new Date(signals.pairCreatedAt) : null,
       confidence: result.confidence,
       hardFail: result.hardFail,
+      reasons: JSON.stringify(result.reasons),
       rawResponse: raw != null ? JSON.stringify(raw) : null,
       score: {
         create: {

@@ -46,6 +46,20 @@ export function createApi() {
           lastCheckedAt: p.lastCheckedAt,
           score: latest?.score?.score ?? null,
           breakdown: latest?.score?.breakdown ? JSON.parse(latest.score.breakdown) : null,
+          // v2 sinyalleri — skorun NEDEN o skor oldugunu panelde gosterebilmek icin.
+          confidence: latest?.confidence ?? null,
+          hardFail: latest?.hardFail ?? null,
+          reasons: safeParseArray(latest?.reasons),
+          liquidityUsd: latest?.liquidityUsd ?? null,
+          topHolderPct: latest?.topHolderPct ?? null,
+          top10HolderPct: latest?.top10HolderPct ?? null,
+          holderCount: latest?.holderCount ?? null,
+          honeypotResult: latest?.honeypotResult ?? null,
+          sellPriceImpact: latest?.sellPriceImpact ?? null,
+          buys1h: latest?.buys1h ?? null,
+          sells1h: latest?.sells1h ?? null,
+          fdvUsd: latest?.fdvUsd ?? null,
+          pairCreatedAt: latest?.pairCreatedAt ?? null,
         };
       })
       .filter((r) => (r.score ?? 0) >= minScore);
@@ -69,4 +83,16 @@ export function createApi() {
   });
 
   return app;
+}
+
+// reasons kolonu JSON string[] tutuyor; bozuk/eksik kayit panelin tamamini
+// dusurmesin diye sessizce bos diziye dusuyoruz.
+function safeParseArray(s: string | null | undefined): string[] {
+  if (!s) return [];
+  try {
+    const v = JSON.parse(s);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
 }

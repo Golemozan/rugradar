@@ -7,6 +7,20 @@ export interface PoolRow {
   lastCheckedAt: string;
   score: number | null;
   breakdown: Record<string, number> | null;
+  // v2 sinyalleri
+  confidence: number | null;
+  hardFail: boolean | null;
+  reasons: string[];
+  liquidityUsd: number | null;
+  topHolderPct: number | null;
+  top10HolderPct: number | null;
+  holderCount: number | null;
+  honeypotResult: string | null; // pass | fail | unknown
+  sellPriceImpact: number | null;
+  buys1h: number | null;
+  sells1h: number | null;
+  fdvUsd: number | null;
+  pairCreatedAt: string | null;
 }
 
 export interface AlertRow {

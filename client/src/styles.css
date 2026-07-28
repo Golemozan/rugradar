@@ -242,10 +242,225 @@ a.dex:hover {
 .empty {
   color: var(--muted);
   font-size: 14px;
-  padding: 24px 0;
+  padding: 28px 12px;
   text-align: center;
+}
+.empty-title {
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.empty-hint {
+  font-size: 13px;
+  max-width: 42ch;
+  margin: 0 auto;
+  line-height: 1.5;
 }
 .err {
   color: var(--critical);
   font-size: 13px;
+}
+
+/* Sunucu hatasi gorunur olur, sessizce yutulmaz. */
+.err-note {
+  border: 1px solid var(--critical);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--critical) 8%, transparent);
+}
+
+/* kart basligi + filtre serisi */
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.card-head h2 {
+  margin: 0;
+}
+.seg {
+  display: flex;
+  gap: 4px;
+}
+.seg-btn {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 36px;
+  padding: 0 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.seg-btn:hover {
+  color: var(--text-primary);
+}
+.seg-btn.on {
+  color: var(--text-primary);
+  background: var(--page);
+  border-color: var(--baseline);
+}
+
+/* Tiklanan her sey en az 36px gercek hedef alan. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  min-height: 36px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.icon-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.icon-btn.link {
+  color: var(--series-1);
+}
+.row-actions {
+  display: flex;
+  gap: 2px;
+  justify-content: flex-end;
+}
+
+/* Klavye kullanicisi kaybolmaz. */
+:where(button, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* Tablolar mobilde yatay tasmaz, kendi icinde kayar. */
+.tscroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.tscroll table {
+  min-width: 720px;
+}
+
+/* elenen satir: renk tek basina degil, sol serit + solgunluk birlikte */
+.row-gated td {
+  opacity: 0.6;
+}
+.row-gated td:first-child {
+  box-shadow: inset 3px 0 0 var(--critical);
+}
+
+/* gerekce paneli */
+.row-detail td {
+  background: var(--page);
+  padding: 0;
+}
+.reasons {
+  padding: 12px 14px 14px;
+}
+.reasons-head {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.reasons ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 2px 18px;
+}
+.reasons li {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+.bd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--grid);
+}
+.bd-item {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-variant-numeric: tabular-nums;
+}
+.bd-item b {
+  color: var(--text-secondary);
+}
+
+/* veri guveni olcegi */
+.conf {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.conf-track {
+  width: 34px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--grid);
+  overflow: hidden;
+}
+.conf-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+.conf-n {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.badge .bscore {
+  min-width: 2ch;
+  display: inline-block;
+}
+
+/* yuklenirken bos ekran degil, nihai duzenin iskeleti */
+.skeleton {
+  display: grid;
+  gap: 10px;
+  padding: 6px 0;
+}
+.sk-row {
+  display: flex;
+  gap: 12px;
+}
+.sk-cell {
+  height: 12px;
+  border-radius: 4px;
+  background: var(--grid);
+  animation: sk-pulse 1.4s ease-in-out infinite;
+}
+@keyframes sk-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sk-cell { animation: none; }
+  .hist .bar { transition: none; }
 }

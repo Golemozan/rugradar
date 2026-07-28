@@ -52,6 +52,7 @@ model Check {
   pairCreatedAt        DateTime?
   confidence           Float?   // 0..1 — kac kritik sinyal cozuldu
   hardFail             Boolean? // gate'e takildi mi (alert atilmadi)
+  reasons              String?  // JSON string[] — skorun insan-okur gerekcesi
   rawResponse          String?  // JSON string — ham API cevabi (SQLite Json desteklemez)
 
   score Score?
