@@ -222,15 +222,15 @@ export function scorePool(
   // "Rug dugmeleri" — her biri projeyi tek hamlede oldurebilir. $150k likidite ve
   // 1200 holder, mint authority ACIK oldugu gercegini telafi etmez.
   if (s.freezeAuthorityActive === true && score > cfg.freezeAuthorityCapScore) {
-    reasons.push(`Freeze authority acik — skor ${cfg.freezeAuthorityCapScore}'a kapatildi`);
+    reasons.push(`Freeze authority acik — skor ${toScore(cfg.freezeAuthorityCapScore)} kapatildi`);
     score = cfg.freezeAuthorityCapScore;
   }
   if (s.mintAuthorityActive === true && score > cfg.mintAuthorityCapScore) {
-    reasons.push(`Mint authority acik — skor ${cfg.mintAuthorityCapScore}'a kapatildi`);
+    reasons.push(`Mint authority acik — skor ${toScore(cfg.mintAuthorityCapScore)} kapatildi`);
     score = cfg.mintAuthorityCapScore;
   }
   if (s.liquidityLocked === false && score > cfg.unlockedLpCapScore) {
-    reasons.push(`Likidite kilitsiz — skor ${cfg.unlockedLpCapScore}'a kapatildi`);
+    reasons.push(`Likidite kilitsiz — skor ${toScore(cfg.unlockedLpCapScore)} kapatildi`);
     score = cfg.unlockedLpCapScore;
   }
 
@@ -238,23 +238,23 @@ export function scorePool(
   // tam puan verilmez — olculen sey rota, havuzun kalinligi degil.
   if (s.liquidityUsd == null && score > cfg.unverifiedLiquidityCapScore) {
     reasons.push(
-      `Likidite dogrulanamadi — skor ${cfg.unverifiedLiquidityCapScore}'a kapatildi`
+      `Likidite dogrulanamadi — skor ${toScore(cfg.unverifiedLiquidityCapScore)} kapatildi`
     );
     score = cfg.unverifiedLiquidityCapScore;
   }
 
   if (s.topHolderPct != null && s.topHolderPct > cfg.topHolderCapPct && score > cfg.topHolderCapScore) {
-    reasons.push(`Tek cuzdan >${pct(cfg.topHolderCapPct)} — skor ${cfg.topHolderCapScore}'a kapatildi`);
+    reasons.push(`Tek cuzdan >${pct(cfg.topHolderCapPct)} — skor ${toScore(cfg.topHolderCapScore)} kapatildi`);
     score = cfg.topHolderCapScore;
   }
   if (s.top10HolderPct != null && s.top10HolderPct > cfg.top10CapPct && score > cfg.top10CapScore) {
-    reasons.push(`Ilk 10 cuzdan >${pct(cfg.top10CapPct)} — skor ${cfg.top10CapScore}'a kapatildi`);
+    reasons.push(`Ilk 10 cuzdan >${pct(cfg.top10CapPct)} — skor ${toScore(cfg.top10CapScore)} kapatildi`);
     score = cfg.top10CapScore;
   }
   // Bilmemek temiz olmak degildir: veri cogunlukla cozulemediyse skor tavanlanir.
   if (confidence < cfg.minConfidence && score > cfg.lowConfidenceCapScore) {
     reasons.push(
-      `Veri guveni dusuk (${pct(confidence)}) — skor ${cfg.lowConfidenceCapScore}'a kapatildi`
+      `Veri guveni dusuk (${pct(confidence)}) — skor ${toScore(cfg.lowConfidenceCapScore)} kapatildi`
     );
     score = cfg.lowConfidenceCapScore;
   }
@@ -328,6 +328,20 @@ function round(n: number): number {
 }
 function pct(n: number): string {
   return `%${Math.round(n * 100)}`;
+}
+
+// Turkce yonelme eki (-a/-e/-ya/-ye) sayinin OKUNUSUNA gore degisir:
+// 30'a ama 35'e, 50'ye ama 45'e. Sabit 'a yazmak metni bozuyordu.
+// "35" -> "35'e", "50" -> "50'ye", "30" -> "30'a"
+function toScore(n: number): string {
+  const last = n % 10;
+  // Tam onluklar okunusuna gore: yuz'e on'a yirmi'ye otuz'a kirk'a elli'ye
+  //                              altmis'a yetmis'e seksen'e doksan'a
+  const tens = ["e", "a", "ye", "a", "a", "ye", "a", "e", "e", "a"];
+  // Birler: bir'e iki'ye uc'e dort'e bes'e alti'ya yedi'ye sekiz'e dokuz'a
+  const ones = ["", "e", "ye", "e", "e", "e", "ya", "ye", "e", "a"];
+  const suffix = last === 0 ? tens[(n / 10) % 10] : ones[last];
+  return `${n}'${suffix}`;
 }
 function usd(n: number): string {
   return `$${Math.round(n).toLocaleString("en-US")}`;
