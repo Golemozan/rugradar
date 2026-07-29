@@ -9,8 +9,6 @@ import {
   TableSkeleton,
   TableScroll,
   ScoreBadge,
-  Confidence,
-  PctCell,
   UsdCell,
   timeAgo,
 } from "./ui.tsx";
@@ -127,12 +125,19 @@ function ScannerView() {
             hint="Worker taradıkça dağılım buraya çıkar."
           />
         ) : (
+          // Yatay cubuk: dikey histogramda 1 ve 108 yan yana gelince kucuk
+          // degerler gorunmez sac teline dusuyordu, kartin ustu de bos kaliyordu.
           <div className="hist">
             {buckets.map((b) => (
-              <div className="col" key={b.label}>
-                <span className="n">{b.n}</span>
-                <div className="bar" style={{ height: `${(b.n / maxBucket) * 100}%` }} />
-                <span className="x">{b.label}</span>
+              <div className="hrow" key={b.label}>
+                <span className="hlabel">{b.label}</span>
+                <span className="htrack">
+                  <span
+                    className="hfill"
+                    style={{ width: b.n ? `${Math.max((b.n / maxBucket) * 100, 1.5)}%` : "0%" }}
+                  />
+                </span>
+                <span className="hn">{b.n}</span>
               </div>
             ))}
           </div>
@@ -179,11 +184,8 @@ function ScannerView() {
                 <tr>
                   <th>Coin</th>
                   <th>Skor</th>
-                  <th>Güven</th>
                   <th>Likidite</th>
-                  <th>İlk 10</th>
                   <th>Satış</th>
-                  <th>1sa al/sat</th>
                   <th>Tarama</th>
                   <th></th>
                 </tr>
@@ -224,19 +226,10 @@ function PoolRowView({
           <ScoreBadge score={p.score ?? 0} threshold={THRESHOLD} hardFail={p.hardFail} />
         </td>
         <td>
-          <Confidence value={p.confidence} />
-        </td>
-        <td>
           <UsdCell value={p.liquidityUsd} />
         </td>
         <td>
-          <PctCell value={p.top10HolderPct} warnAbove={0.6} />
-        </td>
-        <td>
           <SellCell result={p.honeypotResult} impact={p.sellPriceImpact} />
-        </td>
-        <td className="chain">
-          {p.buys1h != null && p.sells1h != null ? `${p.buys1h}/${p.sells1h}` : "—"}
         </td>
         <td className="chain">{timeAgo(p.lastCheckedAt)}</td>
         <td className="row-actions">
@@ -263,7 +256,7 @@ function PoolRowView({
       </tr>
       {open && hasReasons ? (
         <tr className="row-detail">
-          <td colSpan={9}>
+          <td colSpan={6}>
             <div className="reasons">
               <div className="reasons-head">
                 {p.hardFail ? "Neden elendi" : "Skor gerekçesi"}
@@ -275,15 +268,25 @@ function PoolRowView({
                   <li key={i}>{r}</li>
                 ))}
               </ul>
-              {p.breakdown ? (
-                <div className="bd">
-                  {Object.entries(p.breakdown).map(([k, v]) => (
-                    <span className="bd-item" key={k}>
-                      {factorLabel(k)} <b>{v}</b>
-                    </span>
-                  ))}
-                </div>
-              ) : null}
+              <div className="bd">
+                <span className="bd-item">
+                  güven <b>{p.confidence != null ? `%${Math.round(p.confidence * 100)}` : "—"}</b>
+                </span>
+                <span className="bd-item">
+                  ilk 10 <b>{p.top10HolderPct != null ? `%${Math.round(p.top10HolderPct * 100)}` : "—"}</b>
+                </span>
+                <span className="bd-item">
+                  1sa al/sat{" "}
+                  <b>{p.buys1h != null && p.sells1h != null ? `${p.buys1h}/${p.sells1h}` : "—"}</b>
+                </span>
+                {p.breakdown
+                  ? Object.entries(p.breakdown).map(([k, v]) => (
+                      <span className="bd-item" key={k}>
+                        {factorLabel(k)} <b>{v}</b>
+                      </span>
+                    ))
+                  : null}
+              </div>
             </div>
           </td>
         </tr>

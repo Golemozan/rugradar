@@ -87,7 +87,7 @@ export function ScoreBadge({
 }) {
   if (hardFail) {
     return (
-      <span className="badge">
+      <span className="badge" style={tint("var(--critical)")}>
         <span className="bdot" style={{ background: "var(--critical)" }} />
         <span className="bscore">—</span>
         <span className="tier">elendi</span>
@@ -101,12 +101,18 @@ export function ScoreBadge({
         ? { color: "var(--warning)", tier: "orta" }
         : { color: "var(--critical)", tier: "riskli" };
   return (
-    <span className="badge">
+    <span className="badge" style={tint(color)}>
       <span className="bdot" style={{ background: color }} />
       <span className="bscore">{Math.round(score)}</span>
       <span className="tier">{tier}</span>
     </span>
   );
+}
+
+// Rozet zemini: durum renginin dusuk yogunluklu hali. Renk tek basina
+// anlam tasimasin diye nokta + sayi + metin etiketi zaten birlikte geliyor.
+function tint(color: string): React.CSSProperties {
+  return { ["--badge-bg" as string]: `color-mix(in oklch, ${color} 16%, transparent)` };
 }
 
 // Veri guveni: 0..1. Dolulugu cubukla, degeri yaziyla — ikisi birlikte.
