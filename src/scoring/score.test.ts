@@ -153,6 +153,26 @@ test("likidite yoksa derinlik satis etkisinden olculur", () => {
   );
 });
 
+// Likidite rakami olmayan pumpfun coinlerinde wash kontrolu eskiden HIC
+// calismiyordu (notr 0.5). Artik FDV payda olarak kullaniliyor.
+test("likidite yokken wash kontrolu FDV uzerinden calisir", () => {
+  const pumpfun = { ...good, liquidityUsd: null, volumeUsd5m: null };
+  const saglikli = scorePool({ ...pumpfun, volumeUsd1h: 15_000, fdvUsd: 50_000 }); // 0.3x
+  const wash = scorePool({ ...pumpfun, volumeUsd1h: 49_000, fdvUsd: 2_700 }); // 18x
+  assert.ok(
+    wash.breakdown.organic < saglikli.breakdown.organic,
+    `wash daha dusuk organik almali: ${wash.breakdown.organic} vs ${saglikli.breakdown.organic}`
+  );
+  assert.match(wash.reasons.join(" "), /wash\/churn suphesi/);
+  assert.match(saglikli.reasons.join(" "), /Hacim\/FDV .* makul/);
+});
+
+// Yaniltici mesaj: hacim VARDI, eksik olan likiditeydi.
+test("eksik veri mesaji hangi alanin eksik oldugunu soyler", () => {
+  const r = scorePool({ ...good, liquidityUsd: null, volumeUsd5m: null, volumeUsd1h: null, fdvUsd: null });
+  assert.match(r.reasons.join(" "), /Likidite rakami yok — hacim orani hesaplanamadi/);
+});
+
 test("supheli coin dusuk skor alir", () => {
   const bad: SafetySignals = {
     ...good,

@@ -23,6 +23,11 @@ const WEIGHTS = {
 const LIQ_FLOOR_USD = 2_000;
 const LIQ_CEIL_USD = 500_000;
 
+// Likidite rakami olmayan (pumpfun) coinlerde wash esigi: 1sa hacim / FDV.
+// ILK KALIBRASYON — kucuk ornekten turetildi (saglikli pumpswap ornegi 0.3x,
+// supheli pumpfun'lar 8-18x). Canli veri biriktikce gozden gecirilmeli.
+const WASH_FDV_RATIO = 15;
+
 // Saf fonksiyon: I/O yok, sadece SafetySignals -> ScoreResult.
 // Test edilebilir cekirdek. Poller/DB/Telegram bunu cagirir.
 export function scorePool(
@@ -153,7 +158,7 @@ export function scorePool(
 
   // --- Organiklik: hacim/likidite (%50) + alis-satis dengesi (%50) ---
   {
-    let volF = 0.5; // veri yoksa notr
+    let volF = 0.5; // olcemedigimizde notr
     if (s.volumeUsd5m != null && s.liquidityUsd != null && s.liquidityUsd > 0) {
       const ratio = s.volumeUsd5m / s.liquidityUsd;
       // saglikli bant ~0.02..2. Cok dusuk = olu, cok yuksek = wash.
@@ -161,8 +166,21 @@ export function scorePool(
       else if (ratio > 5) { volF = 0.1; reasons.push(`Hacim/likidite asiri (${ratio.toFixed(1)}x) — wash suphesi`); }
       else if (ratio > 2) { volF = 0.6; reasons.push(`Hacim/likidite yuksek (${ratio.toFixed(1)}x)`); }
       else { volF = 1; reasons.push(`Hacim/likidite saglikli (${ratio.toFixed(2)}x)`); }
+    } else if (s.volumeUsd1h != null && s.fdvUsd != null && s.fdvUsd > 0) {
+      // Likidite rakami yok (pumpfun) ama hacim ve FDV VAR. Eskiden burada
+      // notr 0.5 veriliyordu — yani wash kontrolu pumpfun'da hic calismiyordu.
+      // FDV'yi payda olarak kullaniyoruz: bonding curve'de egri derinligi
+      // degerlemeyle birlikte buyur, oran churn'un makul bir vekili.
+      // 5dk yerine 1sa: bonding curve'de 5dk penceresi cok gurultulu.
+      const ratio = s.volumeUsd1h / s.fdvUsd;
+      if (ratio < 0.05) { volF = 0.3; reasons.push(`Hacim/FDV ${ratio.toFixed(2)}x — olu`); }
+      else if (ratio > WASH_FDV_RATIO) { volF = 0.15; reasons.push(`Hacim/FDV ${ratio.toFixed(1)}x — wash/churn suphesi`); }
+      else if (ratio > 5) { volF = 0.5; reasons.push(`Hacim/FDV ${ratio.toFixed(1)}x — yuksek`); }
+      else { volF = 1; reasons.push(`Hacim/FDV ${ratio.toFixed(2)}x — makul`); }
+    } else if (s.liquidityUsd == null) {
+      reasons.push("Likidite rakami yok — hacim orani hesaplanamadi");
     } else {
-      reasons.push("Hacim/likidite verisi eksik");
+      reasons.push("Hacim verisi yok");
     }
 
     let txF = 0.5;
