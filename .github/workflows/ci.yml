@@ -12,6 +12,9 @@ jobs:
   test:
     name: typecheck + test (${{ matrix.mode }})
     runs-on: ubuntu-latest
+    # Asili kalan bir test kosusu varsayilan 6 saat runner yakar; bir kez oldu
+    # (kapatilmayan redis soketi). Bu sinir hatayi dakikalar icinde gorunur kiliyor.
+    timeout-minutes: 10
 
     strategy:
       fail-fast: false

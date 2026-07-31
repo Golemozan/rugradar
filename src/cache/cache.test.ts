@@ -1,7 +1,14 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { markSeen, cacheMode, resetCache } from "./index.js";
+import { markSeen, cacheMode, resetCache, closeCache } from "./index.js";
 import { sleep } from "../sources/http.js";
+
+// REDIS_URL varken modul yuklenir yuklenmez bir soket aciliyor (lazyConnect: false).
+// Kapatilmazsa testler bitse bile process cikmiyor ve CI sonsuza kadar asili kaliyor —
+// bellek modunda hic baglanti acilmadigi icin bu sadece redis seridinde gorunur.
+after(async () => {
+  await closeCache();
+});
 
 // Bu dosya REDIS_URL yokken bellek modunu test eder. CI'da ayrica REDIS_URL
 // set edilerek ayni testler redis modunda da kosuyor (bkz. .github/workflows/ci.yml)
