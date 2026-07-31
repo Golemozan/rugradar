@@ -39,7 +39,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22+ sart: `node --test` glob desteklemiyor Node 20'de -> test dosyalari
+          # bulunamiyor. package.json engines alani da bunu zorunlu kiliyor.
+          node-version: 24
           cache: npm
 
       - name: Install
@@ -63,7 +65,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22+ sart: `node --test` glob desteklemiyor Node 20'de -> test dosyalari
+          # bulunamiyor. package.json engines alani da bunu zorunlu kiliyor.
+          node-version: 24
           cache: npm
 
       - run: npm ci

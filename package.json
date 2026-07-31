@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Real-time DEX memecoin scanner + scorer with alerts (Solana first)",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "tsx watch src/worker/index.ts",
     "start:local": "tsx src/worker/index.ts",
