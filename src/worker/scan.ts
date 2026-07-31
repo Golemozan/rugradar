@@ -6,6 +6,7 @@ import { scorePool } from "../scoring/score.js";
 import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from "../scoring/types.js";
 import { sendAlert } from "../notify/telegram.js";
 import { sleep } from "../sources/http.js";
+import { markSeen } from "../cache/index.js";
 
 const THRESHOLD = Number(process.env.ALERT_SCORE_THRESHOLD ?? 70);
 
@@ -22,13 +23,40 @@ function num(v: string | undefined, fallback: number): number {
   return Number.isFinite(n) && v !== undefined && v !== "" ? n : fallback;
 }
 
-// Ayni pool'u kisa surede tekrar taramamak icin bellek cache'i.
-const recentlyChecked = new Map<string, number>();
+// Ayni pool'u kisa surede tekrar taramamak icin paylasimli cache (bkz. src/cache).
 const RECHECK_COOLDOWN_MS = 10 * 60 * 1000; // 10 dk
 
+function seenKey(chain: string, addr: string): string {
+  return `seen:${chain}:${addr}`;
+}
+
+/**
+ * Yeni adresleri kesfeder ve daha once taranmamis olanlari dondurur.
+ * Ayiklamayi burada yapiyoruz ki hem seri dongu hem kuyruk ayni kurali kullansin.
+ */
+export async function discoverFreshAddresses(chain = "solana"): Promise<string[]> {
+  const addresses = await fetchNewTokenAddresses(chain);
+  if (addresses.length === 0) return [];
+
+  const fresh: string[] = [];
+  for (const addr of addresses) {
+    if (await markSeen(seenKey(chain, addr), RECHECK_COOLDOWN_MS)) fresh.push(addr);
+  }
+  return fresh;
+}
+
+/** Tek bir adresi uctan uca isler. Kuyruk isleyicisi de bunu cagirir. */
+export async function scanAddress(addr: string, chain = "solana"): Promise<boolean> {
+  const pair = await fetchTopPair(chain, addr);
+  if (!pair) return false;
+  await processPair(pair);
+  return true;
+}
+
 // Solana icin tam bir tarama turu: kesfet -> tara -> skorla -> kaydet -> alert.
+// Redis yokken kullanilan seri yol; kuyruk modunda yerini src/queue alir.
 export async function scanSolanaOnce(): Promise<void> {
-  const addresses = await fetchNewTokenAddresses("solana");
+  const addresses = await discoverFreshAddresses("solana");
   if (addresses.length === 0) {
     console.log("[scan] solana: yeni token yok");
     return;
@@ -36,22 +64,11 @@ export async function scanSolanaOnce(): Promise<void> {
 
   let scanned = 0;
   for (const addr of addresses) {
-    const now = Date.now();
-    const last = recentlyChecked.get(addr);
-    if (last && now - last < RECHECK_COOLDOWN_MS) continue;
-    recentlyChecked.set(addr, now);
-
-    const pair = await fetchTopPair("solana", addr);
-    if (!pair) continue;
-
-    await processPair(pair);
-    scanned++;
-
-    // rate-limit'e nazik ol
+    if (await scanAddress(addr, "solana")) scanned++;
+    // rate-limit'e nazik ol (kuyruk modunda bunu BullMQ limiter yapar)
     await sleep(250);
   }
   console.log(`[scan] solana: ${scanned} pool tarandi (esik ${THRESHOLD})`);
-  pruneCache();
 }
 
 // Tek bir pair'i uctan uca isle.
@@ -143,12 +160,5 @@ async function processPair(pair: DexPair): Promise<void> {
       });
       console.log(`[alert] ${pair.baseToken.symbol} skor ${result.score} -> gonderildi`);
     }
-  }
-}
-
-function pruneCache(): void {
-  const now = Date.now();
-  for (const [k, t] of recentlyChecked) {
-    if (now - t > RECHECK_COOLDOWN_MS) recentlyChecked.delete(k);
   }
 }
