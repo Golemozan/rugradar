@@ -7,6 +7,7 @@ import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from "../scoring/types.js"
 import { sendAlert } from "../notify/telegram.js";
 import { sleep } from "../sources/http.js";
 import { markSeen } from "../cache/index.js";
+import { recordAlert } from "../metrics.js";
 
 const THRESHOLD = Number(process.env.ALERT_SCORE_THRESHOLD ?? 70);
 
@@ -158,6 +159,7 @@ async function processPair(pair: DexPair): Promise<void> {
           channel: "telegram",
         },
       });
+      recordAlert();
       console.log(`[alert] ${pair.baseToken.symbol} skor ${result.score} -> gonderildi`);
     }
   }
