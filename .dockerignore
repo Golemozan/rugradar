@@ -1,0 +1,17 @@
+node_modules
+client/node_modules
+dist
+client/dist
+.git
+.github
+.env
+.chatid
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+*.tsbuildinfo
+.binance-listings-cache.json
+README.md
+*.cmd

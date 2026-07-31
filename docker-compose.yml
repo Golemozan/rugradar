@@ -1,0 +1,54 @@
+# Tam kurulum: Redis + worker. `docker compose up` tek komutla ayaga kalkar.
+#
+# Redis burada VAR oldugu icin worker otomatik olarak kuyruk moduna geciyor
+# (bkz. src/queue/index.ts). Redis'siz lokal kosu icin `npm run start:local`
+# yeterli — orada sistem seri moda duser.
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    # appendonly: yeniden baslatmada dedup cache'i kaybetmemek icin.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      # SQLite dosyasi volume'de -> container yeniden kurulunca veri durur.
+      DATABASE_URL: "file:/data/rugradar.db"
+      REDIS_URL: "redis://redis:6379"
+      PORT: "3000"
+      SCAN_CONCURRENCY: "${SCAN_CONCURRENCY:-4}"
+      SCAN_RATE_PER_SEC: "${SCAN_RATE_PER_SEC:-8}"
+      ALERT_SCORE_THRESHOLD: "${ALERT_SCORE_THRESHOLD:-70}"
+      SOLANA_POLL_INTERVAL_MS: "${SOLANA_POLL_INTERVAL_MS:-30000}"
+      # Bos birakilirsa alert sadece loglanir.
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+    volumes:
+      - worker-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  redis-data:
+  worker-data:

@@ -14,5 +14,6 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  // Testler tsx ile kaynaktan kosuyor; uretim imajina girmelerinin anlami yok.
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
 }
