@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  # Matris burada sus degil: proje Redis'siz de calismak zorunda (repoyu klonlayan
+  # Redis kurmak zorunda kalmasin diye). Iki modu da kosmazsak zarif dusus
+  # sessizce bozulur ve bunu ancak lokalde fark ederiz.
+  test:
+    name: typecheck + test (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [memory, redis]
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: "file:./ci.db"
+      # memory modunda bos kalir -> bellek yoluna duser
+      REDIS_URL: ${{ matrix.mode == 'redis' && 'redis://localhost:6379' || '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Prisma generate
+        run: npx prisma generate
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+  build:
+    name: build + docker
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run build
+
+      # Imaj gercekten kuruluyor mu — compose'u bozan degisiklik CI'da yakalansin.
+      - name: Docker build
+        run: docker build -t rugradar:ci .
