@@ -1,6 +1,9 @@
 import express from "express";
 import { prisma } from "../db/client.js";
 import { getBinanceListings } from "../worker/binanceScan.js";
+import { snapshot } from "../metrics.js";
+import { cacheMode } from "../cache/index.js";
+import { queueEnabled, queueDepth } from "../queue/index.js";
 
 // Dashboard bu API'yi tuketir (Phase 3). Simdilik JSON endpoint'ler.
 export function createApi() {
@@ -15,6 +18,18 @@ export function createApi() {
 
   app.get("/health", (_req, res) => {
     res.json({ ok: true, ts: new Date().toISOString() });
+  });
+
+  // Calisma verimliligi: kac pool tarandi, ne kadar surdu, kuyrukta ne var.
+  // README'deki rakamlar buradan ve scripts/bench.ts'ten geliyor — elle
+  // yazilmis "10x hizli" iddiasi yok.
+  app.get("/metrics", async (_req, res) => {
+    res.json({
+      ...snapshot(),
+      cache: cacheMode(),
+      mode: queueEnabled() ? "queue" : "serial",
+      queue: await queueDepth(),
+    });
   });
 
   // Son taranan pool'lar (skoruyla). ?minScore= ile filtre.

@@ -25,17 +25,111 @@ RugRadar continuously discovers new Solana DEX pools, runs them through a set of
 Honeypot failure is a **hard gate**: score drops to 0 and no alert is sent.
 
 ### Tech stack
-- **Worker:** Node.js 20+ · TypeScript (single process: poller + scorer + Telegram bot + internal API)
+- **Worker:** Node.js 20+ · TypeScript (poller + scorer + Telegram bot + internal API)
+- **Queue:** BullMQ over Redis — concurrent scanning with a queue-wide rate limit
+- **Cache:** Redis (`SET NX PX`) with an in-process fallback
 - **DB:** SQLite locally (no daemon), Postgres-ready for deploy (Prisma)
-- **Telegram:** grammy
-- **API:** Express · **Dashboard:** React + Vite + Tailwind-style CSS
+- **Telegram:** grammy · **API:** Express · **Dashboard:** React + Vite
+- **Ops:** multi-stage Docker · Docker Compose · GitHub Actions CI
 - **Data sources (all free, no API key):** DexScreener, RugCheck.xyz
 
 ### Architecture
 ```
-DexScreener (discovery) → RugCheck (safety) → scorePool() → SQLite/Postgres
-                                                   └→ over threshold → Telegram
+                  ┌──────────── discovery loop (cheap, 1 request) ────────────┐
+                  │  DexScreener /token-profiles                              │
+                  └───────────────────────────┬──────────────────────────────┘
+                                              │ addresses
+                                    ┌─────────▼─────────┐
+                                    │  dedup cache      │  Redis SET NX PX
+                                    │  (10 min TTL)     │  └ fallback: in-process Map
+                                    └─────────┬─────────┘
+                                              │ unseen only
+                                    ┌─────────▼─────────┐
+                                    │   scan queue      │  BullMQ
+                                    │  concurrency 4    │  retries 3 (exp. backoff)
+                                    │  rate 8 req/s     │
+                                    └─────────┬─────────┘
+                                              │ one job per address
+   ┌──────────────────────────────────────────▼──────────────────────────────┐
+   │  DexScreener (pair) → RugCheck (safety) → Jupiter (sell test)           │
+   │                              ↓                                          │
+   │                        scorePool()  ──► SQLite / Postgres               │
+   │                              └─ score ≥ threshold ──► Telegram alert     │
+   └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Without `REDIS_URL` the whole middle section collapses to the original serial
+loop** — same results, same alerts, just slower. Nothing else has to change.
+
+### Engineering notes
+
+Three decisions worth explaining, because each one exists for a reason in the code
+rather than for its own sake.
+
+**1. Why Redis for the dedup cache**
+This used to be a `Map` inside `scan.ts`. It had three problems: it vanished on
+restart (so the same pool was re-scanned), a second worker process couldn't see the
+first one's marks, and "read then write" were two separate steps — two concurrent
+jobs could pass the same address at the same time. `SET key NX PX ttl` is one atomic
+command that fixes all three. See `src/cache/index.ts`.
+
+**2. Concurrency alone would have made things worse**
+The old loop slept 250 ms between addresses. That sleep was really a crude global
+rate limit — it kept DexScreener/RugCheck from returning 429. Removing it and
+starting 4 workers would just move the bottleneck into the 429 handler. So the two
+concerns are separated: **concurrency** is the worker's `concurrency`, **rate** is
+BullMQ's queue-wide `limiter`. Tuning one no longer breaks the other.
+
+**3. Concurrency vs SQLite**
+SQLite allows a single writer. Four jobs writing at once raise `SQLITE_BUSY`. Rather
+than switching databases, the Prisma pool is pinned to `connection_limit=1` for
+`file:` URLs: network work (the real bottleneck) stays concurrent, database writes
+queue up in the pool. On Postgres the limit isn't applied. See `src/db/client.ts`.
+
+### Benchmark
+
+`npx tsx scripts/bench.ts` — the same workload run through both pipelines.
+
+Upstream is a local HTTP server with a fixed delay, **not** the real APIs: their
+latency drifts minute to minute and hammering them for a benchmark would be rude.
+What is being measured is the shape of the pipeline, not network speed. The script
+asserts both modes issued the identical number of requests, so the comparison is
+like-for-like.
+
+```
+40 addresses · 3 upstream calls each · 120 ms simulated latency · concurrency 4 · 8 req/s
+
+serial   26.89s   (120 requests)      672 ms per address
+queue     4.86s   (120 requests)      122 ms per address
+                                      ─────────────────
+                                      5.53x
+```
+
+Reproduce with different parameters:
+```bash
+BENCH_ADDRESSES=100 BENCH_LATENCY_MS=200 SCAN_CONCURRENCY=8 npx tsx scripts/bench.ts
+```
+
+Live counters are exposed at `GET /metrics` (scanned, skipped, errors, alerts,
+p50/p95 duration, queue depth, active mode).
+
+### Tests
+
+```bash
+npm test        # 35 tests
+```
+
+- `src/scoring/score.test.ts` — 20 tests over the scoring engine, including
+  regressions that v1 got wrong (distributed bundles where top-1 looks fine but
+  top-10 holds 68%; pump.fun pools that report no liquidity figure at all).
+- `src/sources/http.test.ts` — retry, exponential backoff, timeout/abort, and
+  keeping the HTTP status intact. Uses a real `node:http` server on an ephemeral
+  port rather than a fetch stub, because the abort path never fires against a stub.
+- `src/cache/cache.test.ts` — TTL behaviour and the concurrency guarantee: ten
+  simultaneous calls, exactly one passes.
+
+CI runs the whole suite twice — once in memory mode, once against Redis — so the
+fallback path can't silently rot.
 
 ### Quick start
 ```bash
@@ -55,6 +149,16 @@ cd client && npm install && npm run dev   # http://localhost:5173
 
 On Windows, just double-click **`RugRadar.cmd`** (worker only) or **`RugRadar-Panel.cmd`** (worker + panel).
 
+**With Docker (Redis + queue mode, one command):**
+```bash
+docker compose up
+curl localhost:3000/health
+curl localhost:3000/metrics    # mode: "queue"
+```
+Compose brings up Redis alongside the worker, so queue mode switches on by itself —
+no extra configuration. Data and the dedup cache live in named volumes and survive
+a rebuild.
+
 ### Telegram bot
 - Paste a **DexScreener link or token address** → instant report: score, price, market cap, volume, buy/sell counts (m5 + h1), mint/freeze authority, top holder, honeypot flag.
 - 10+ buys / 0 sells in 1h → honeypot warning.
@@ -70,11 +174,16 @@ On Windows, just double-click **`RugRadar.cmd`** (worker only) or **`RugRadar-Pa
 | `ALERT_SCORE_THRESHOLD` | Score that triggers an alert (0–100, default 70) |
 | `SOLANA_POLL_INTERVAL_MS` | Poll interval (default 30000) |
 | `PORT` | Internal API port (default 3000) |
+| `REDIS_URL` | **Optional.** Empty → memory cache + serial scanning. Set → shared cache + queue mode |
+| `SCAN_CONCURRENCY` | Jobs processed at once in queue mode (default 4) |
+| `SCAN_RATE_PER_SEC` | Queue-wide rate limit toward upstream APIs (default 8) |
 
 ### Roadmap
-- [ ] Score calibration (weigh absolute liquidity, not just lock %)
+- [x] Score calibration (weigh absolute liquidity, not just lock %)
+- [x] Redis-backed dedup cache with graceful fallback
+- [x] Queue-based concurrent scanning with rate limiting
+- [x] Docker Compose + CI on both cache backends
 - [ ] Phase 2: Ethereum + BSC (GoPlus + Honeypot.is)
-- [ ] Phase 3: richer React dashboard
 - [ ] Railway deploy
 
 ### ⚠️ Disclaimer
@@ -99,17 +208,112 @@ RugRadar yeni Solana DEX pool'larını sürekli keşfeder, bir dizi "sağlam coi
 Honeypot başarısızlığı bir **hard gate**'tir: skor 0'a düşer ve alert gönderilmez.
 
 ### Tech stack
-- **Worker:** Node.js 20+ · TypeScript (tek process: poller + skorlayıcı + Telegram bot + iç API)
+- **Worker:** Node.js 20+ · TypeScript (poller + skorlayıcı + Telegram bot + iç API)
+- **Kuyruk:** Redis üstünde BullMQ — eş zamanlı tarama + kuyruk geneli hız sınırı
+- **Cache:** Redis (`SET NX PX`), Redis yoksa süreç içi yedek
 - **DB:** Lokalde SQLite (daemon yok), deploy'da Postgres'e hazır (Prisma)
-- **Telegram:** grammy
-- **API:** Express · **Dashboard:** React + Vite + Tailwind tarzı CSS
+- **Telegram:** grammy · **API:** Express · **Dashboard:** React + Vite
+- **Ops:** çok aşamalı Docker · Docker Compose · GitHub Actions CI
 - **Veri kaynakları (hepsi ücretsiz, API key gerektirmez):** DexScreener, RugCheck.xyz
 
 ### Mimari
 ```
-DexScreener (keşif) → RugCheck (güvenlik) → scorePool() → SQLite/Postgres
-                                                 └→ eşiği geçti → Telegram
+                  ┌────────── keşif döngüsü (ucuz, tek istek) ────────────────┐
+                  │  DexScreener /token-profiles                              │
+                  └───────────────────────────┬──────────────────────────────┘
+                                              │ adresler
+                                    ┌─────────▼─────────┐
+                                    │  dedup cache      │  Redis SET NX PX
+                                    │  (10 dk TTL)      │  └ yedek: süreç içi Map
+                                    └─────────┬─────────┘
+                                              │ yalnızca görülmemişler
+                                    ┌─────────▼─────────┐
+                                    │  tarama kuyruğu   │  BullMQ
+                                    │  eş zamanlılık 4  │  3 deneme (üstel backoff)
+                                    │  hız 8 istek/sn   │
+                                    └─────────┬─────────┘
+                                              │ adres başına bir iş
+   ┌──────────────────────────────────────────▼──────────────────────────────┐
+   │  DexScreener (pair) → RugCheck (güvenlik) → Jupiter (satış testi)       │
+   │                              ↓                                          │
+   │                        scorePool()  ──► SQLite / Postgres               │
+   │                              └─ skor ≥ eşik ──► Telegram alert          │
+   └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+**`REDIS_URL` yoksa ortadaki katman komple devre dışı kalır** ve sistem eski seri
+döngüye düşer — aynı sonuçlar, aynı alertler, sadece daha yavaş. Başka hiçbir şey
+değişmiyor.
+
+### Mühendislik notları
+
+Üç karar, açıklamaya değer — çünkü her biri kendi hatırı için değil, koddaki gerçek
+bir sorun yüzünden var.
+
+**1. Dedup cache neden Redis'e taşındı**
+Önceden `scan.ts` içinde bir `Map`'ti. Üç sorunu vardı: process yeniden başlayınca
+uçuyordu (aynı pool baştan taranıyordu), ikinci bir worker açılınca iki süreç
+birbirinin işaretini görmüyordu, ve "oku, sonra yaz" iki ayrı adımdı — eş zamanlı
+iki iş aynı adresi aynı anda geçebiliyordu. `SET key NX PX ttl` tek atomik komutla
+üçünü de kapatıyor. Bkz. `src/cache/index.ts`.
+
+**2. Tek başına eş zamanlılık işi kötüleştirirdi**
+Eski döngü adresler arasında 250 ms uyuyordu. O uyku aslında kaba bir hız sınırıydı:
+DexScreener/RugCheck 429 döndürmesin diye. Onu kaldırıp 4 worker açmak darboğazı
+sadece 429 işleyicisine taşırdı. Bu yüzden iki kaygı ayrıldı: **eş zamanlılık**
+worker'ın `concurrency`'si, **hız** ise BullMQ'nun kuyruk geneli `limiter`'ı. Artık
+birini ayarlamak diğerini bozmuyor.
+
+**3. Eş zamanlılığa karşı SQLite**
+SQLite tek yazara izin verir; dört iş aynı anda yazmaya kalkınca `SQLITE_BUSY` gelir.
+Veritabanını değiştirmek yerine Prisma havuzu `file:` URL'lerinde
+`connection_limit=1`'e sabitlendi: asıl darboğaz olan ağ işi eş zamanlı kalıyor,
+veritabanı yazımları havuzda sıraya giriyor. Postgres'te bu sınır uygulanmıyor.
+Bkz. `src/db/client.ts`.
+
+### Ölçüm
+
+`npx tsx scripts/bench.ts` — aynı iş, iki farklı boru hattından geçiriliyor.
+
+Yukarı akış, gerçek API'ler **değil**, sabit gecikmeli lokal bir HTTP sunucusu:
+gerçeklerin gecikmesi dakikadan dakikaya değişiyor ve ölçüm için onları dövmek
+kabalık olurdu. Ölçülen şey ağın hızı değil, **boru hattının şekli**. Script iki
+modun da birebir aynı sayıda istek attığını doğruluyor, yani karşılaştırma dürüst.
+
+```
+40 adres · adres başına 3 istek · 120 ms taklit gecikme · eş zamanlılık 4 · 8 istek/sn
+
+seri     26.89s   (120 istek)      adres başına 672 ms
+kuyruk    4.86s   (120 istek)      adres başına 122 ms
+                                   ───────────────────
+                                   5.53x
+```
+
+Farklı parametrelerle tekrar üret:
+```bash
+BENCH_ADDRESSES=100 BENCH_LATENCY_MS=200 SCAN_CONCURRENCY=8 npx tsx scripts/bench.ts
+```
+
+Canlı sayaçlar `GET /metrics` altında: taranan, atlanan, hata, alert, p50/p95 süre,
+kuyruk derinliği, aktif mod.
+
+### Testler
+
+```bash
+npm test        # 35 test
+```
+
+- `src/scoring/score.test.ts` — skorlama motorunda 20 test; v1'in kaçırdığı
+  regresyonlar dahil (top-1 masum görünürken top-10'un %68 tuttuğu dağılmış
+  bundle'lar; likidite rakamını hiç vermeyen pump.fun havuzları).
+- `src/sources/http.test.ts` — retry, üstel backoff, timeout/abort ve HTTP durumunu
+  koruma. fetch stub'ı yerine ephemeral portta gerçek `node:http` sunucusu, çünkü
+  stub'a karşı abort yolu hiç tetiklenmiyor.
+- `src/cache/cache.test.ts` — TTL davranışı ve eş zamanlılık garantisi: on eş zamanlı
+  çağrı, tam olarak biri geçiyor.
+
+CI paketi iki kez koşuyor — bir kez bellek modunda, bir kez Redis'e karşı — ki yedek
+yol sessizce çürümesin.
 
 ### Hızlı başlangıç
 ```bash
@@ -129,6 +333,16 @@ cd client && npm install && npm run dev   # http://localhost:5173
 
 Windows'ta sadece **`RugRadar.cmd`** (yalnızca worker) ya da **`RugRadar-Panel.cmd`** (worker + panel) dosyasına çift tıkla.
 
+**Docker ile (Redis + kuyruk modu, tek komut):**
+```bash
+docker compose up
+curl localhost:3000/health
+curl localhost:3000/metrics    # mode: "queue"
+```
+Compose, worker'ın yanında Redis'i de ayağa kaldırdığı için kuyruk modu kendiliğinden
+devreye giriyor — ek ayar yok. Veri ve dedup cache named volume'lerde duruyor,
+yeniden kurulumda kaybolmuyor.
+
 ### Telegram botu
 - **DexScreener linki veya token adresi** yapıştır → anında rapor: skor, fiyat, market cap, hacim, alış/satış sayısı (m5 + h1), mint/freeze authority, top holder, honeypot bayrağı.
 - 1 saatte 10+ alış / 0 satış → honeypot uyarısı.
@@ -144,11 +358,16 @@ Windows'ta sadece **`RugRadar.cmd`** (yalnızca worker) ya da **`RugRadar-Panel.
 | `ALERT_SCORE_THRESHOLD` | Alert tetikleyen skor (0–100, varsayılan 70) |
 | `SOLANA_POLL_INTERVAL_MS` | Poll aralığı (varsayılan 30000) |
 | `PORT` | İç API portu (varsayılan 3000) |
+| `REDIS_URL` | **Opsiyonel.** Boş → bellek cache + seri tarama. Dolu → paylaşımlı cache + kuyruk modu |
+| `SCAN_CONCURRENCY` | Kuyruk modunda eş zamanlı iş sayısı (varsayılan 4) |
+| `SCAN_RATE_PER_SEC` | Dış API'lere kuyruk geneli hız sınırı (varsayılan 8) |
 
 ### Yol haritası
-- [ ] Skor kalibrasyonu (sadece kilit % değil, mutlak likiditeyi de ağırlığa kat)
+- [x] Skor kalibrasyonu (sadece kilit % değil, mutlak likiditeyi de ağırlığa kat)
+- [x] Redis destekli dedup cache, zarif düşüşle
+- [x] Kuyruk tabanlı eş zamanlı tarama + hız sınırı
+- [x] Docker Compose + iki cache modunda CI
 - [ ] Phase 2: Ethereum + BSC (GoPlus + Honeypot.is)
-- [ ] Phase 3: zenginleştirilmiş React dashboard
 - [ ] Railway deploy
 
 ### ⚠️ Sorumluluk reddi
@@ -156,4 +375,4 @@ Bu araç **yalnızca araştırma ve eğitim amaçlıdır**. **Yatırım tavsiyes
 
 ---
 
-Built with [Claude Code](https://claude.com/claude-code) · MIT License
+MIT License
