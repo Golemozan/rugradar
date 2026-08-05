@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import type { PoolRow, AlertRow } from "./types.ts";
 import { BinanceListings } from "./BinanceListings.tsx";
+import { apiGet, DEMO } from "./demo.ts";
 import {
   Tile,
   Card,
@@ -22,6 +23,22 @@ export function App() {
   const [tab, setTab] = useState<Tab>("scanner");
   return (
     <div className="wrap">
+      {/* Vitrin kopyasi oldugunu ziyaretci ilk saniyede gormeli — asagidaki
+          sayilar canli tarama degil. Gizlemek portfolyonun kuralini bozardi. */}
+      {DEMO ? (
+        <div className="demo-bar">
+          <span className="demo-tag">DEMO</span>
+          <p>
+            Bu, RugRadar panelinin vitrin kopyası. Tablolar gerçek bir taramadan alınmış{" "}
+            <b>temsilî veriyle</b> dolu — canlı Solana taraması değil. Çalışan sistem
+            arkada sürekli tarar ve eşiği geçeni Telegram'a düşürür.
+          </p>
+          <a className="demo-back" href="/">
+            ← Portfolyoya dön
+          </a>
+        </div>
+      ) : null}
+
       <header className="top">
         <h1>RugRadar</h1>
         <nav className="tabs">
@@ -52,9 +69,10 @@ function ScannerView() {
 
   const load = useCallback(async () => {
     try {
-      const [pRes, aRes] = await Promise.all([fetch("/api/pools?limit=200"), fetch("/api/alerts")]);
-      if (!pRes.ok) throw new Error(`worker ${pRes.status} döndü`);
-      const [p, a] = await Promise.all([pRes.json(), aRes.json()]);
+      const [p, a] = await Promise.all([
+        apiGet<PoolRow[]>("/api/pools?limit=200"),
+        apiGet<AlertRow[]>("/api/alerts"),
+      ]);
       setPools(Array.isArray(p) ? p : []);
       setAlerts(Array.isArray(a) ? a : []);
       setError(null);
@@ -69,6 +87,8 @@ function ScannerView() {
 
   useEffect(() => {
     load();
+    // Demo modda veri degismiyor; 5 sn'de bir yeniden kurmak bos is.
+    if (DEMO) return;
     const t = setInterval(load, REFRESH_MS);
     return () => clearInterval(t);
   }, [load]);
@@ -95,13 +115,15 @@ function ScannerView() {
   return (
     <>
       <div className="status" style={{ marginBottom: 16 }}>
-        <span className={error ? "dot-live dot-off" : "dot-live"} />
+        <span className={error || DEMO ? "dot-live dot-off" : "dot-live"} />
         <span>
-          {error ? "bağlantı yok" : "canlı"} · {updated ? updated.toLocaleTimeString("tr-TR") : "…"}
+          {/* Demo modda "canli" yazmak yalan olurdu — veri donuk. */}
+          {DEMO ? "demo verisi" : error ? "bağlantı yok" : "canlı"} ·{" "}
+          {updated ? updated.toLocaleTimeString("tr-TR") : "…"}
         </span>
       </div>
 
-      {error ? <ErrorNote message={`${error} — worker çalışıyor mu? (:3000)`} /> : null}
+      {error && !DEMO ? <ErrorNote message={`${error} — worker çalışıyor mu? (:3000)`} /> : null}
 
       <section className="tiles">
         <Tile label="Taranan pool" value={pools.length} sub="son 200 kayıt" />

@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import type { BinanceListingRow, BinanceListingsResponse } from "./types.ts";
+import { apiGet, DEMO } from "./demo.ts";
 import {
   Tile,
   EmptyState,
@@ -20,9 +21,7 @@ export function BinanceListings() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/binance-listings");
-      if (!res.ok) throw new Error(`worker ${res.status} döndü`);
-      const r: BinanceListingsResponse = await res.json();
+      const r = await apiGet<BinanceListingsResponse>("/api/binance-listings");
       setRows(Array.isArray(r.rows) ? r.rows : []);
       setUpdatedAt(r.updatedAt);
       setRefreshing(!!r.refreshing);
@@ -36,6 +35,8 @@ export function BinanceListings() {
 
   useEffect(() => {
     load();
+    // Demo modda veri donuk — periyodik tazeleme bos is.
+    if (DEMO) return;
     const t = setInterval(load, REFRESH_MS);
     return () => clearInterval(t);
   }, [load]);

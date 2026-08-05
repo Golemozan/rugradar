@@ -45,6 +45,53 @@ body {
   padding: 36px 24px 80px;
 }
 
+/* ---------- demo bandi (yalnizca vitrin build'inde) ----------
+   Uyari rengi ama alarm degil: %10 zemin + ince kenar. Amaci ziyaretciyi
+   durdurmak degil, sayilarin temsili oldugunu bir bakista soylemek. */
+.demo-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 28px;
+  padding: 12px 16px;
+  border: 1px solid color-mix(in oklch, var(--warning) 35%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in oklch, var(--warning) 9%, var(--surface));
+}
+.demo-bar p {
+  margin: 0;
+  flex: 1 1 320px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.demo-bar b {
+  color: var(--text-primary);
+  font-weight: 620;
+}
+.demo-tag {
+  flex: none;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--warning);
+  color: oklch(22% 0.03 82);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.demo-back {
+  flex: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 560;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.demo-back:hover {
+  text-decoration: underline;
+}
+
 /* ---------- ust bant ---------- */
 header.top {
   display: flex;
